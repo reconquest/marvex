@@ -55,6 +55,11 @@ func main() {
 		log.Fatal(err)
 	}
 
+	err = i3.Close()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	terminals, err := getActiveTerminals(
 		titleTemplate,
 		tree,
@@ -81,12 +86,15 @@ func main() {
 
 	tmuxCommand := "tmux " + tmuxArguments
 
-	runTerminal(
+	err = runTerminal(
 		terminalPath,
 		newTerminalTitle,
 		tmuxCommand,
 		true,
 	)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func tmuxSessionExists(sessionName string) bool {
@@ -126,6 +134,7 @@ func getNewTerminalNumber(terminals []Terminal) int {
 
 	return newTerminalNumber
 }
+
 func getNewTerminalTitle(template string, workspace string, number int) string {
 	return strings.Replace(
 		strings.Replace(template,
@@ -138,7 +147,13 @@ func getNewTerminalTitle(template string, workspace string, number int) string {
 		-1,
 	)
 }
-func runTerminal(path, title string, command string, removeEnvTMUX bool) (int, error) {
+
+func runTerminal(
+	path string,
+	title string,
+	command string,
+	removeEnvTMUX bool,
+) error {
 	envValues := os.Environ()
 	if removeEnvTMUX {
 		for index, envValue := range envValues {
@@ -156,11 +171,13 @@ func runTerminal(path, title string, command string, removeEnvTMUX bool) (int, e
 		strings.Split(command, " ")...,
 	)
 
-	return syscall.ForkExec(
+	_, err := syscall.ForkExec(
 		path,
 		args,
 		&syscall.ProcAttr{Env: envValues},
 	)
+
+	return err
 }
 
 func getFocusedWorkspace(i3 *i3ipc.IPCSocket) (i3ipc.Workspace, error) {
