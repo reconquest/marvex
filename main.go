@@ -16,13 +16,17 @@ import (
 
 const usage = `Marvex 0.1
 Usage:
-	marvex [options]
+    marvex [options]
 
 Options:
-	-b <path>  Specify path to terrminal binary
-			   [default: /usr/bin/urxvt].
-	-t <tpl>   Specify window title template
-			   [default: marvex: %w-%n].
+    -b <path>        Specify path to terrminal binary
+                     [default: /usr/bin/urxvt].
+    -t <tpl>         Specify window title template
+                     [default: marvex: %w-%n].
+    -c               Send CTRL-L after re-opening terminal.
+    --clear-re <re>  CTRL-L will be send only if following regexp matches
+                     current command name.
+                     [default: ^\w+sh$].
 `
 
 type Terminal struct {
@@ -95,6 +99,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	if args["-c"].(bool) {
+		clearScreen(args["--clear-re"].(string), newTerminalSessionName)
+	}
 }
 
 func tmuxSessionExists(sessionName string) bool {
@@ -135,17 +143,15 @@ func getNewTerminalNumber(terminals []Terminal) int {
 	return newTerminalNumber
 }
 
-func getNewTerminalTitle(template string, workspace string, number int) string {
-	return strings.Replace(
-		strings.Replace(template,
-			"%w",
-			workspace,
-			-1,
-		),
-		"%n",
-		strconv.Itoa(number),
-		-1,
-	)
+func getNewTerminalTitle(
+	template string,
+	workspace string,
+	number int,
+) string {
+	result := strings.Replace(template, "%w", workspace, -1)
+	result = strings.Replace(result, "%n", strconv.Itoa(number), -1)
+
+	return result
 }
 
 func runTerminal(
@@ -215,19 +221,11 @@ func getActiveTerminals(
 		return []Terminal{}, err
 	}
 
-	reTemplate, err := regexp.Compile(
-		strings.Replace(
-			strings.Replace(
-				template,
-				"%w",
-				"([0-9a-z])",
-				-1,
-			),
-			"%n",
-			"([0-9a-z])",
-			-1,
-		),
-	)
+	reTemplateBody := template
+	reTemplateBody = strings.Replace(reTemplateBody, "%w", "([0-9a-z])", -1)
+	reTemplateBody = strings.Replace(reTemplateBody, "%n", "([0-9a-z])", -1)
+
+	reTemplate, err := regexp.Compile(reTemplateBody)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -277,7 +275,10 @@ func getContentNode(outputNodes []i3ipc.I3Node) (i3ipc.I3Node, error) {
 	)
 }
 
-func getOutputNode(rootNodes []i3ipc.I3Node, output string) (i3ipc.I3Node, error) {
+func getOutputNode(
+	rootNodes []i3ipc.I3Node,
+	output string,
+) (i3ipc.I3Node, error) {
 	for _, outputNode := range rootNodes {
 		if outputNode.Name == output {
 			return outputNode, nil
@@ -305,4 +306,68 @@ func getWorkspaceNode(
 			"workspaceName = %s, wokspaceNodes = %#v",
 		workspaceName, workspaceNodes,
 	)
+}
+
+func clearScreen(matchRegexp, sessionName string) error {
+	attached, commandName := waitSessionToAttach(sessionName)
+
+	isShell, _ := regexp.MatchString(matchRegexp, commandName)
+	if !attached || !isShell {
+		return nil
+	}
+
+	cmd := exec.Command("tmux", "send-keys", "-R", "-t", sessionName, "C-l")
+	_, err := cmd.CombinedOutput()
+
+	return err
+}
+
+func waitSessionToAttach(sessionName string) (bool, string) {
+	// tmux totally can't into the space.
+	//
+	// Even after session is marked as attached in the session list, it doesn't
+	// mean that it's fully initialized, and there is no way to find when tmux
+	// is initialized.
+	//
+	// When session is not attached, tmux reports window size as 24x80.
+	//
+	// And we can't clear the screen until tmux fix window position according
+	// to the parent size.
+	probablyNotInitialized := true
+
+	for {
+		cmd := exec.Command(
+			"tmux", "list-sessions", "-F",
+			"#S:#{?session_attached,X,}:"+
+				"#{window_width}x#{window_height}:#{pane_current_command}",
+		)
+
+		output, err := cmd.Output()
+		if err != nil {
+			return false, ""
+		}
+
+		tmuxSessions := strings.Split(string(output), "\n")
+		for _, tmuxSession := range tmuxSessions {
+			if strings.HasPrefix(tmuxSession, sessionName+":X") {
+				geometryAndCommand := strings.SplitN(
+					tmuxSession[len(sessionName)+3:], ":", 2,
+				)
+
+				geometry := geometryAndCommand[0]
+				// It's called probablyNotInitialized because we actually can
+				// have window with size of 24x80.
+				if geometry == "24x80" && probablyNotInitialized {
+					probablyNotInitialized = false
+					continue
+				}
+
+				commandName := geometryAndCommand[1]
+
+				return true, commandName
+			}
+		}
+	}
+
+	return false, ""
 }
