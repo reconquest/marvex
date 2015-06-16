@@ -101,7 +101,10 @@ func main() {
 	}
 
 	if args["-c"].(bool) {
-		clearScreen(args["--clear-re"].(string), newTerminalSessionName)
+		err := clearScreen(args["--clear-re"].(string), newTerminalSessionName)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 }
 
