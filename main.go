@@ -332,7 +332,7 @@ func waitSessionToAttach(sessionName string) (bool, string) {
 	// mean that it's fully initialized, and there is no way to find when tmux
 	// is initialized.
 	//
-	// When session is not attached, tmux reports window size as 24x80.
+	// When session is not attached, tmux reports window size as 80x24.
 	//
 	// And we can't clear the screen until tmux fix window position according
 	// to the parent size.
@@ -358,9 +358,10 @@ func waitSessionToAttach(sessionName string) (bool, string) {
 				)
 
 				geometry := geometryAndCommand[0]
+
 				// It's called probablyNotInitialized because we actually can
-				// have window with size of 24x80.
-				if geometry == "24x80" && probablyNotInitialized {
+				// have window with size of 80x24
+				if geometry == "80x24" && probablyNotInitialized {
 					probablyNotInitialized = false
 					continue
 				}
