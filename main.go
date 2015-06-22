@@ -82,8 +82,10 @@ func main() {
 	)
 
 	var tmuxArguments string
+	screenShouldBeCleared := false
 	if tmuxSessionExists(newTerminalSessionName) {
 		tmuxArguments = "attach -t " + newTerminalSessionName
+		screenShouldBeCleared = args["-c"].(bool)
 	} else {
 		tmuxArguments = "new-session -s " + newTerminalSessionName
 	}
@@ -100,7 +102,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if args["-c"].(bool) {
+	if screenShouldBeCleared {
 		err := clearScreen(args["--clear-re"].(string), newTerminalSessionName)
 		if err != nil {
 			log.Fatal(err)
