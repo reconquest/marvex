@@ -102,6 +102,8 @@ func main() {
 		log.Fatal(err)
 	}
 
+	fmt.Println(newTerminalSessionName)
+
 	if screenShouldBeCleared {
 		err := clearScreen(args["--clear-re"].(string), newTerminalSessionName)
 		if err != nil {
