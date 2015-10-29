@@ -9,16 +9,19 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/docopt/docopt-go"
 	"github.com/proxypoke/i3ipc"
 )
 
-const usage = `Marvex 0.1
+const usage = `Marvex 2.0
+
 Usage:
     marvex [options]
 
 Options:
+	-e <cmd>         Execute specified command in new terminal.
     -b <path>        Specify path to terrminal binary
                      [default: /usr/bin/urxvt].
     -t <tpl>         Specify window title template
@@ -35,11 +38,12 @@ type Terminal struct {
 }
 
 func main() {
-	args, _ := docopt.Parse(usage, nil, true, "1.0", false)
+	args, _ := docopt.Parse(usage, nil, true, "2.0", false)
 
 	var (
-		terminalPath  = args["-b"].(string)
-		titleTemplate = args["-t"].(string)
+		terminalPath           = args["-b"].(string)
+		titleTemplate          = args["-t"].(string)
+		cmdline, shouldExecute = args["-e"].(string)
 	)
 
 	i3, err := i3ipc.GetIPCSocket()
@@ -102,14 +106,34 @@ func main() {
 		log.Fatal(err)
 	}
 
-	fmt.Println(newTerminalSessionName)
-
 	if screenShouldBeCleared {
 		err := clearScreen(args["--clear-re"].(string), newTerminalSessionName)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
+
+	if shouldExecute {
+		err := tmuxSend(newTerminalSessionName, cmdline)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	fmt.Println(newTerminalSessionName)
+}
+
+func tmuxSend(session, cmdline string) error {
+	for !tmuxSessionExists(session) {
+		time.Sleep(time.Millisecond * 100)
+	}
+
+	cmd := exec.Command(
+		"tmux", "send", "-t", session, cmdline+"\n",
+	)
+
+	_, err := cmd.CombinedOutput()
+	return err
 }
 
 func tmuxSessionExists(sessionName string) bool {
