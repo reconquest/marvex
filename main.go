@@ -253,8 +253,8 @@ func getActiveTerminals(
 	}
 
 	reTemplateBody := template
-	reTemplateBody = strings.Replace(reTemplateBody, "%w", "([0-9a-z])", -1)
-	reTemplateBody = strings.Replace(reTemplateBody, "%n", "([0-9a-z])", -1)
+	reTemplateBody = strings.Replace(reTemplateBody, "%w", "([0-9a-z]+)", -1)
+	reTemplateBody = strings.Replace(reTemplateBody, "%n", "([0-9a-z]+)", -1)
 
 	reTemplate, err := regexp.Compile(reTemplateBody)
 	if err != nil {
