@@ -21,11 +21,11 @@ Usage:
     marvex [options]
 
 Options:
-	-e <cmd>         Execute specified command in new terminal.
+    -e <cmd>         Execute specified command in new terminal.
     -b <path>        Specify path to terrminal binary
                      [default: /usr/bin/urxvt].
     -t <tpl>         Specify window title template
-                     [default: marvex: %w-%n].
+                     [default: marvex-%w-%n].
     -c               Send CTRL-L after re-opening terminal.
     --clear-re <re>  CTRL-L will be send only if following regexp matches
                      current command name.
