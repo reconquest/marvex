@@ -25,7 +25,7 @@ Options:
     -b <path>        Specify path to terminal binary
                       [default: /usr/bin/urxvt].
     -t <tpl>         Specify window title template
-                      [default: marvex: %w-%n].
+                      [default: marvex-%w-%n].
     -c               Send CTRL-L after re-opening terminal.
     -s               Smart split.
     --clear-re <re>  CTRL-L will be send only if following regexp matches
