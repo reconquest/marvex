@@ -93,7 +93,7 @@ func main() {
 	tmuxCommand := "tmux " + tmuxArguments
 
 	if smartSplit {
-		err = splitWorkspace(i3, workspace)
+		err = splitWorkspace(i3)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -139,7 +139,7 @@ func tmuxSend(session, cmdline string) error {
 	return err
 }
 
-func splitWorkspace(i3 *i3ipc.IPCSocket, workspace i3ipc.Workspace) error {
+func splitWorkspace(i3 *i3ipc.IPCSocket) error {
 	window, err := getFocusedWindow(i3)
 	if err != nil {
 		return err
@@ -147,8 +147,8 @@ func splitWorkspace(i3 *i3ipc.IPCSocket, workspace i3ipc.Workspace) error {
 
 	var (
 		parentLayout = window.Layout
-		width        = float32(workspace.Rect.Width)
-		height       = float32(workspace.Rect.Height)
+		width        = float32(window.Rect.Width)
+		height       = float32(window.Rect.Height)
 	)
 
 	if width*float32(0.75) > height && parentLayout != "splith" {
@@ -251,13 +251,27 @@ func getFocusedWindow(i3 *i3ipc.IPCSocket) (i3ipc.I3Node, error) {
 		return tree, err
 	}
 
-	for _, node := range tree.Nodes {
-		if node.Focused {
-			return node, nil
+	var walker func(i3ipc.I3Node) (i3ipc.I3Node, bool)
+
+	walker = func(node i3ipc.I3Node) (i3ipc.I3Node, bool) {
+		for _, subnode := range node.Nodes {
+			if subnode.Focused {
+				subnode.Layout = node.Layout
+				return subnode, true
+			}
+
+			activeNode, ok := walker(subnode)
+			if ok {
+				return activeNode, true
+			}
 		}
+
+		return node, false
 	}
 
-	return tree, nil
+	node, _ := walker(tree)
+
+	return node, nil
 }
 
 func getFocusedWorkspace(i3 *i3ipc.IPCSocket) (i3ipc.Workspace, error) {
