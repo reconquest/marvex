@@ -22,14 +22,14 @@ Usage:
 
 Options:
     -e <cmd>         Execute specified command in new terminal.
-    -b <path>        Specify path to terrminal binary
-                     [default: /usr/bin/urxvt].
+    -b <path>        Specify path to terminal binary
+                      [default: /usr/bin/urxvt].
     -t <tpl>         Specify window title template
-                     [default: marvex-%w-%n].
+                      [default: marvex: %w-%n].
     -c               Send CTRL-L after re-opening terminal.
+    -s               Smart split.
     --clear-re <re>  CTRL-L will be send only if following regexp matches
-                     current command name.
-                     [default: ^\w+sh$].
+                      current command name [default: ^\w+sh$].
 `
 
 type Terminal struct {
@@ -44,6 +44,7 @@ func main() {
 		terminalPath           = args["-b"].(string)
 		titleTemplate          = args["-t"].(string)
 		cmdline, shouldExecute = args["-e"].(string)
+		smartSplit             = args["-s"].(bool)
 	)
 
 	i3, err := i3ipc.GetIPCSocket()
@@ -59,11 +60,6 @@ func main() {
 	}
 
 	workspace, err := getFocusedWorkspace(i3)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = i3.Close()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -95,6 +91,13 @@ func main() {
 	}
 
 	tmuxCommand := "tmux " + tmuxArguments
+
+	if smartSplit {
+		err = splitWorkspace(i3, workspace)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 
 	err = runTerminal(
 		terminalPath,
@@ -134,6 +137,31 @@ func tmuxSend(session, cmdline string) error {
 
 	_, err := cmd.CombinedOutput()
 	return err
+}
+
+func splitWorkspace(i3 *i3ipc.IPCSocket, workspace i3ipc.Workspace) error {
+	window, err := getFocusedWindow(i3)
+	if err != nil {
+		return err
+	}
+
+	var (
+		parentLayout = window.Layout
+		width        = float32(workspace.Rect.Width)
+		height       = float32(workspace.Rect.Height)
+	)
+
+	if width*float32(0.75) > height && parentLayout != "splith" {
+		_, err = i3.Command("split horizontal")
+		return err
+	}
+
+	if height*float32(0.75) < width && parentLayout != "splitv" {
+		_, err = i3.Command("split vertical")
+		return err
+	}
+
+	return nil
 }
 
 func tmuxSessionExists(sessionName string) bool {
@@ -215,6 +243,21 @@ func runTerminal(
 	)
 
 	return err
+}
+
+func getFocusedWindow(i3 *i3ipc.IPCSocket) (i3ipc.I3Node, error) {
+	tree, err := i3.GetTree()
+	if err != nil {
+		return tree, err
+	}
+
+	for _, node := range tree.Nodes {
+		if node.Focused {
+			return node, nil
+		}
+	}
+
+	return tree, nil
 }
 
 func getFocusedWorkspace(i3 *i3ipc.IPCSocket) (i3ipc.Workspace, error) {
