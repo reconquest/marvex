@@ -30,6 +30,7 @@ Options:
     -s               Smart split.
     --clear-re <re>  CTRL-L will be send only if following regexp matches
                       current command name [default: ^\w+sh$].
+    --class <class>  Set X window class name.
 `
 
 type Terminal struct {
@@ -45,6 +46,7 @@ func main() {
 		titleTemplate          = args["-t"].(string)
 		cmdline, shouldExecute = args["-e"].(string)
 		smartSplit             = args["-s"].(bool)
+		className, _           = args["--class"].(string)
 	)
 
 	i3, err := i3ipc.GetIPCSocket()
@@ -102,6 +104,7 @@ func main() {
 	err = runTerminal(
 		terminalPath,
 		newTerminalTitle,
+		className,
 		tmuxCommand,
 		true,
 	)
@@ -216,6 +219,7 @@ func getNewTerminalTitle(
 func runTerminal(
 	path string,
 	title string,
+	class string,
 	command string,
 	removeEnvTMUX bool,
 ) error {
@@ -229,12 +233,16 @@ func runTerminal(
 		}
 	}
 
-	args := append(
-		[]string{
-			path, "-title", title, "-e",
-		},
-		strings.Split(command, " ")...,
-	)
+	args := []string{
+		path, "-title", title,
+	}
+
+	if class != "" {
+		args = append(args, "-name", class)
+	}
+
+	args = append(args, "-e")
+	args = append(args,  strings.Split(command, " ")...)
 
 	_, err := syscall.ForkExec(
 		path,
