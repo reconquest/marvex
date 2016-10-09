@@ -13,24 +13,26 @@ import (
 
 	"github.com/docopt/docopt-go"
 	"github.com/proxypoke/i3ipc"
+	"github.com/reconquest/executil-go"
 )
 
-const usage = `Marvex 2.0
+const usage = `Marvex 3.0
 
 Usage:
     marvex [options]
 
 Options:
-    -e <cmd>         Execute specified command in new terminal.
-    -b <path>        Specify path to terminal binary
-                      [default: /usr/bin/urxvt].
-    -t <tpl>         Specify window title template
-                      [default: marvex-%w-%n].
-    -c               Send CTRL-L after re-opening terminal.
-    -s               Smart split.
-    --clear-re <re>  CTRL-L will be send only if following regexp matches
-                      current command name [default: ^\w+sh$].
-    --class <class>  Set X window class name.
+  -e <cmd>                Execute specified command in new terminal.
+  -b <path>               Specify path to terminal binary
+                           [default: /usr/bin/urxvt].
+  -t <tpl>                Specify window title template
+                           [default: marvex-%w-%n].
+  -c                      Send CTRL-L after opening terminal.
+  -s                      Smart split.
+  --clear-re <re>         CTRL-L will be send only if following regexp matches
+                           current command name [default: ^\w+sh$].
+  --class <class>  Set X window class name.
+  -r --reserving <count>  Specify count of reserving terminals. [default: 2]
 `
 
 type Terminal struct {
@@ -38,8 +40,9 @@ type Terminal struct {
 	Number    int
 }
 
+// TODO: add verbose logging, rework error handling (hierarchical erors)
 func main() {
-	args, _ := docopt.Parse(usage, nil, true, "2.0", false)
+	args, _ := docopt.Parse(usage, nil, true, "3.0", false)
 
 	var (
 		terminalPath           = args["-b"].(string)
@@ -47,6 +50,8 @@ func main() {
 		cmdline, shouldExecute = args["-e"].(string)
 		smartSplit             = args["-s"].(bool)
 		className, _           = args["--class"].(string)
+		shouldClearScreen      = args["-c"].(bool)
+		reserving, _           = strconv.Atoi(args["--reserving"].(string))
 	)
 
 	i3, err := i3ipc.GetIPCSocket()
@@ -75,24 +80,23 @@ func main() {
 		log.Fatal(err)
 	}
 
-	newTerminalNumber := getNewTerminalNumber(terminals)
-	newTerminalTitle := getNewTerminalTitle(
-		titleTemplate, workspace.Name, newTerminalNumber,
-	)
-	newTerminalSessionName := tmuxGetSessionName(
-		workspace.Name, newTerminalNumber,
+	var (
+		terminalNumber = getNewTerminalNumber(terminals)
+		terminalName   = getTerminalName(
+			titleTemplate, workspace.Name, terminalNumber,
+		)
+
+		terminalSession = getTerminalSession(
+			workspace.Name, terminalNumber,
+		)
 	)
 
-	var tmuxArguments string
-	screenShouldBeCleared := false
-	if tmuxSessionExists(newTerminalSessionName) {
-		tmuxArguments = "attach -t " + newTerminalSessionName
-		screenShouldBeCleared = args["-c"].(bool)
-	} else {
-		tmuxArguments = "new-session -s " + newTerminalSessionName
+	if !tmuxSessionExists(terminalSession) {
+		err := makeTmuxSession(terminalSession)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
-
-	tmuxCommand := "tmux " + tmuxArguments
 
 	if smartSplit {
 		err = splitWorkspace(i3)
@@ -102,36 +106,97 @@ func main() {
 	}
 
 	err = runTerminal(
-		terminalPath,
-		newTerminalTitle,
-		className,
-		tmuxCommand,
+		terminalPath, terminalName, className,
+		"tmux attach -t "+terminalSession,
 		true,
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if screenShouldBeCleared {
-		err := clearScreen(args["--clear-re"].(string), newTerminalSessionName)
+	if shouldClearScreen {
+		err := clearScreen(args["--clear-re"].(string), terminalSession)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
 
 	if shouldExecute {
-		err := tmuxSend(newTerminalSessionName, cmdline)
+		err := tmuxSend(terminalSession, cmdline)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
 
-	fmt.Println(newTerminalSessionName)
+	fmt.Println(terminalSession)
+
+	err = reserveTerminals(reserving)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func reserveTerminals(need int) error {
+	reserved := 0
+
+	sessions := tmuxListSessions()
+	for _, session := range sessions {
+		if strings.HasPrefix(session, "marvex-reserve-") {
+			reserved++
+		}
+	}
+
+	for i := 0; i < need-reserved; i++ {
+		_, _, err := executil.Run(
+			exec.Command(
+				"tmux",
+				"new-session",
+				"-d",
+				"-s",
+				fmt.Sprintf(
+					"marvex-reserve-%d",
+					time.Now().UnixNano(),
+				),
+			),
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func makeTmuxSession(name string) error {
+	sessions := tmuxListSessions()
+	for _, session := range sessions {
+		if strings.HasPrefix(session, "marvex-reserve-") {
+			return tmuxRenameSession(session, name)
+		}
+	}
+
+	return tmuxNewSession(name)
+}
+
+func tmuxRenameSession(old, new string) error {
+	_, _, err := executil.Run(
+		exec.Command("tmux", "rename-session", "-t", old, new),
+	)
+
+	return err
+}
+
+func tmuxNewSession(name string) error {
+	_, _, err := executil.Run(
+		exec.Command("tmux", "new-session", "-d", "-s", name),
+	)
+
+	return err
 }
 
 func tmuxSend(session, cmdline string) error {
 	for !tmuxSessionExists(session) {
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 50)
 	}
 
 	cmd := exec.Command(
@@ -167,12 +232,14 @@ func splitWorkspace(i3 *i3ipc.IPCSocket) error {
 	return nil
 }
 
-func tmuxSessionExists(sessionName string) bool {
+func tmuxListSessions() []string {
 	cmd := exec.Command("tmux", "list-sessions", "-F", "#S")
 	output, _ := cmd.Output()
-	tmuxSessions := strings.Split(string(output), "\n")
+	return strings.Split(string(output), "\n")
 
-	for _, tmuxSession := range tmuxSessions {
+}
+func tmuxSessionExists(sessionName string) bool {
+	for _, tmuxSession := range tmuxListSessions() {
 		if tmuxSession == sessionName {
 			return true
 		}
@@ -181,7 +248,7 @@ func tmuxSessionExists(sessionName string) bool {
 	return false
 }
 
-func tmuxGetSessionName(workspace string, terminalNumber int) string {
+func getTerminalSession(workspace string, terminalNumber int) string {
 	return fmt.Sprintf("marvex-%s-%d", workspace, terminalNumber)
 }
 
@@ -205,7 +272,7 @@ func getNewTerminalNumber(terminals []Terminal) int {
 	return newTerminalNumber
 }
 
-func getNewTerminalTitle(
+func getTerminalName(
 	template string,
 	workspace string,
 	number int,
@@ -242,7 +309,7 @@ func runTerminal(
 	}
 
 	args = append(args, "-e")
-	args = append(args,  strings.Split(command, " ")...)
+	args = append(args, strings.Split(command, " ")...)
 
 	_, err := syscall.ForkExec(
 		path,
