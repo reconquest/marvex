@@ -31,7 +31,7 @@ Options:
   -s                      Smart split.
   --clear-re <re>         CTRL-L will be send only if following regexp matches
                            current command name [default: ^\w+sh$].
-  --class <class>  Set X window class name.
+  --class <class>         Set X window class name.
   -r --reserving <count>  Specify count of reserving terminals. [default: 2]
 `
 
