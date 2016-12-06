@@ -33,6 +33,9 @@ Options:
                            current command name [default: ^\w+sh$].
   --class <class>         Set X window class name.
   -r --reserving <count>  Specify count of reserving terminals. [default: 2]
+  --lock <file>           Lock file path to prevent assigning same terminal to
+                            several urxvt.
+                            [default: /var/run/user/$UID/marvex.lock]
 `
 
 type Terminal struct {
@@ -42,6 +45,10 @@ type Terminal struct {
 
 // TODO: add verbose logging, rework error handling (hierarchical erors)
 func main() {
+	uid := os.Getuid()
+
+	usage := strings.Replace(usage, "$UID", fmt.Sprint(uid), -1)
+
 	args, _ := docopt.Parse(usage, nil, true, "3.0", false)
 
 	var (
@@ -52,7 +59,13 @@ func main() {
 		className, _           = args["--class"].(string)
 		shouldClearScreen      = args["-c"].(bool)
 		reserving, _           = strconv.Atoi(args["--reserving"].(string))
+		lockFile               = args["--lock"].(string)
 	)
+
+	err := obtainLock(lockFile)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	i3, err := i3ipc.GetIPCSocket()
 	if err != nil {
@@ -134,6 +147,28 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func obtainLock(lockFilePath string) error {
+	handle, err := os.OpenFile(lockFilePath, os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf(
+			"can't open lock file '%s': %s",
+			lockFilePath,
+			err,
+		)
+	}
+
+	err = syscall.Flock(int(handle.Fd()), syscall.LOCK_EX)
+	if err != nil {
+		return fmt.Errorf(
+			"can't lock opened lock file '%s': %s",
+			lockFilePath,
+			err,
+		)
+	}
+
+	return nil
 }
 
 func reserveTerminals(need int) error {
