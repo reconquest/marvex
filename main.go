@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/docopt/docopt-go"
+	"github.com/nsf/termbox-go"
 	"github.com/proxypoke/i3ipc"
 	"github.com/reconquest/executil-go"
 )
@@ -29,13 +30,17 @@ Options:
                            [default: marvex-%w-%n].
   -c                      Send CTRL-L after opening terminal.
   -s                      Smart split.
+  -d                      Dummy mode will start terminal with placeholder,
+                           which can be converted into shell by pressing
+                           Enter. Pressing CTRL-S or Escape will close
+                           placeholder without spawning shell.
   --clear-re <re>         CTRL-L will be send only if following regexp matches
                            current command name [default: ^\w+sh$].
   --class <class>         Set X window class name.
   -r --reserving <count>  Specify count of reserving terminals. [default: 2]
   --lock <file>           Lock file path to prevent assigning same terminal to
-                            several urxvt.
-                            [default: /var/run/user/$UID/marvex.lock]
+                           several urxvt.
+                           [default: /var/run/user/$UID/marvex.lock]
 `
 
 type Terminal struct {
@@ -60,12 +65,8 @@ func main() {
 		shouldClearScreen      = args["-c"].(bool)
 		reserving, _           = strconv.Atoi(args["--reserving"].(string))
 		lockFile               = args["--lock"].(string)
+		dummyMode              = args["-d"].(bool)
 	)
-
-	err := obtainLock(lockFile)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	i3, err := i3ipc.GetIPCSocket()
 	if err != nil {
@@ -73,6 +74,15 @@ func main() {
 	}
 
 	defer i3.Close()
+
+	var unlock func()
+
+	if !dummyMode || os.Getenv("MARVEX_DUMMY_SESSION") == "" {
+		unlock, err = obtainLock(lockFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 
 	tree, err := i3.GetTree()
 	if err != nil {
@@ -104,6 +114,48 @@ func main() {
 		)
 	)
 
+	if dummyMode {
+		if os.Getenv("MARVEX_DUMMY_SESSION") == "" {
+			unlock()
+
+			err := runTerminal(
+				i3,
+				terminalPath, terminalName, className,
+				os.Args[0]+" -d",
+				smartSplit,
+				append(os.Environ(), "MARVEX_DUMMY_SESSION="+terminalSession),
+			)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			return
+		} else {
+			terminalSession = os.Getenv("MARVEX_DUMMY_SESSION")
+
+			err := termbox.Init()
+			if err != nil {
+				log.Fatal(err)
+			}
+
+		loop:
+			for {
+				switch ev := termbox.PollEvent(); ev.Type {
+				case termbox.EventKey:
+					switch ev.Key {
+					case termbox.KeyEnter:
+						termbox.Close()
+						break loop
+
+					case termbox.KeyEsc, termbox.KeyCtrlC:
+						termbox.Close()
+						return
+					}
+				}
+			}
+		}
+	}
+
 	if !tmuxSessionExists(terminalSession) {
 		err := makeTmuxSession(terminalSession)
 		if err != nil {
@@ -111,26 +163,33 @@ func main() {
 		}
 	}
 
-	if smartSplit {
-		err = splitWorkspace(i3)
+	if dummyMode {
+		err = syscall.Exec(
+			"/usr/bin/tmux",
+			[]string{"tmux", "attach", "-t", terminalSession},
+			os.Environ(),
+		)
+
+		log.Fatal(err)
+
+		return // should not be reachable
+	} else {
+		err = runTerminal(
+			i3,
+			terminalPath, terminalName, className,
+			"tmux attach -t "+terminalSession,
+			smartSplit,
+			os.Environ(),
+		)
 		if err != nil {
 			log.Fatal(err)
 		}
-	}
 
-	err = runTerminal(
-		terminalPath, terminalName, className,
-		"tmux attach -t "+terminalSession,
-		true,
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if shouldClearScreen {
-		err := clearScreen(args["--clear-re"].(string), terminalSession)
-		if err != nil {
-			log.Fatal(err)
+		if shouldClearScreen {
+			err := clearScreen(args["--clear-re"].(string), terminalSession)
+			if err != nil {
+				log.Fatal(err)
+			}
 		}
 	}
 
@@ -149,10 +208,10 @@ func main() {
 	}
 }
 
-func obtainLock(lockFilePath string) error {
+func obtainLock(lockFilePath string) (func(), error) {
 	handle, err := os.OpenFile(lockFilePath, os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"can't open lock file '%s': %s",
 			lockFilePath,
 			err,
@@ -161,14 +220,16 @@ func obtainLock(lockFilePath string) error {
 
 	err = syscall.Flock(int(handle.Fd()), syscall.LOCK_EX)
 	if err != nil {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"can't lock opened lock file '%s': %s",
 			lockFilePath,
 			err,
 		)
 	}
 
-	return nil
+	return func() {
+		handle.Close()
+	}, nil
 }
 
 func reserveTerminals(need int) error {
@@ -319,19 +380,25 @@ func getTerminalName(
 }
 
 func runTerminal(
+	i3 *i3ipc.IPCSocket,
 	path string,
 	title string,
 	class string,
 	command string,
-	removeEnvTMUX bool,
+	smartSplit bool,
+	env []string,
 ) error {
-	envValues := os.Environ()
-	if removeEnvTMUX {
-		for index, envValue := range envValues {
-			if strings.HasPrefix(envValue, "TMUX=") {
-				envValues[index] = ""
-				break
-			}
+	if smartSplit {
+		err := splitWorkspace(i3)
+		if err != nil {
+			return err
+		}
+	}
+
+	for index, envValue := range env {
+		if strings.HasPrefix(envValue, "TMUX=") {
+			env[index] = ""
+			break
 		}
 	}
 
@@ -349,7 +416,7 @@ func runTerminal(
 	_, err := syscall.ForkExec(
 		path,
 		args,
-		&syscall.ProcAttr{Env: envValues},
+		&syscall.ProcAttr{Env: env},
 	)
 
 	return err
