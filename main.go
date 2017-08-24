@@ -17,7 +17,7 @@ import (
 	"github.com/reconquest/executil-go"
 )
 
-const usage = `Marvex 3.0
+const usage = `Marvex 4.0
 
 Usage:
     marvex [options]
@@ -30,6 +30,7 @@ Options:
                            [default: marvex-%w-%n].
   -c                      Send CTRL-L after opening terminal.
   -s                      Smart split.
+  -m                      Split most bigger workspace.
   -d                      Dummy mode will start terminal with placeholder,
                            which can be converted into shell by pressing
                            Enter. Pressing CTRL-S or Escape will close
@@ -49,18 +50,20 @@ type Terminal struct {
 }
 
 // TODO: add verbose logging, rework error handling (hierarchical erors)
+// TODO: separate files by routines: i3/tmux/syscall-wrappers.
 func main() {
 	uid := os.Getuid()
 
 	usage := strings.Replace(usage, "$UID", fmt.Sprint(uid), -1)
 
-	args, _ := docopt.Parse(usage, nil, true, "3.0", false)
+	args, _ := docopt.Parse(usage, nil, true, "4.0", false)
 
 	var (
 		terminalPath           = args["-b"].(string)
 		titleTemplate          = args["-t"].(string)
 		cmdline, shouldExecute = args["-e"].(string)
 		smartSplit             = args["-s"].(bool)
+		biggestSplit           = args["-m"].(bool)
 		className, _           = args["--class"].(string)
 		shouldClearScreen      = args["-c"].(bool)
 		reserving, _           = strconv.Atoi(args["--reserving"].(string))
@@ -122,7 +125,7 @@ func main() {
 				i3,
 				terminalPath, terminalName, className,
 				os.Args[0]+" -d",
-				smartSplit,
+				smartSplit, biggestSplit,
 				append(os.Environ(), "MARVEX_DUMMY_SESSION="+terminalSession),
 			)
 			if err != nil {
@@ -178,7 +181,7 @@ func main() {
 			i3,
 			terminalPath, terminalName, className,
 			"tmux attach -t "+terminalSession,
-			smartSplit,
+			smartSplit, biggestSplit,
 			os.Environ(),
 		)
 		if err != nil {
@@ -303,12 +306,7 @@ func tmuxSend(session, cmdline string) error {
 	return err
 }
 
-func splitWorkspace(i3 *i3ipc.IPCSocket) error {
-	window, err := getFocusedWindow(i3)
-	if err != nil {
-		return err
-	}
-
+func splitWindow(i3 *i3ipc.IPCSocket, window i3ipc.I3Node) error {
 	var (
 		parentLayout = window.Layout
 		width        = float32(window.Rect.Width)
@@ -316,16 +314,41 @@ func splitWorkspace(i3 *i3ipc.IPCSocket) error {
 	)
 
 	if width*float32(0.75) > height && parentLayout != "splith" {
-		_, err = i3.Command("split horizontal")
+		_, err := i3.Command("split horizontal")
 		return err
 	}
 
 	if height*float32(0.75) < width && parentLayout != "splitv" {
-		_, err = i3.Command("split vertical")
+		_, err := i3.Command("split vertical")
 		return err
 	}
 
 	return nil
+}
+
+func splitWindowModeSmart(i3 *i3ipc.IPCSocket) error {
+	window, err := getFocusedWindow(i3)
+	if err != nil {
+		return err
+	}
+
+	return splitWindow(i3, window)
+}
+
+func splitWindowModeBiggest(i3 *i3ipc.IPCSocket) error {
+	window, err := getBiggestWindow(i3)
+	if err != nil {
+		return err
+	}
+
+	_, err = i3.Command(
+		fmt.Sprintf(`[con_id="%d"] focus`, window.Id),
+	)
+	if err != nil {
+		return err
+	}
+
+	return splitWindow(i3, window)
 }
 
 func tmuxListSessions() []string {
@@ -386,10 +409,16 @@ func runTerminal(
 	class string,
 	command string,
 	smartSplit bool,
+	biggestSplit bool,
 	env []string,
 ) error {
-	if smartSplit {
-		err := splitWorkspace(i3)
+	if biggestSplit {
+		err := splitWindowModeBiggest(i3)
+		if err != nil {
+			return err
+		}
+	} else if smartSplit {
+		err := splitWindowModeSmart(i3)
 		if err != nil {
 			return err
 		}
@@ -449,6 +478,70 @@ func getFocusedWindow(i3 *i3ipc.IPCSocket) (i3ipc.I3Node, error) {
 	node, _ := walker(tree)
 
 	return node, nil
+}
+
+func getBiggestNode(node i3ipc.I3Node) (i3ipc.I3Node, int64) {
+	var bigNode i3ipc.I3Node
+	var bigArea int64
+
+	for _, subnode := range node.Nodes {
+		if subnode.Name != "" {
+			area := int64(subnode.Rect.Height) * int64(subnode.Rect.Width)
+
+			log.Printf(
+				"node: %d | %q | %d x %d = %d | %q",
+				subnode.Id,
+				subnode.Name,
+				subnode.Rect.Height,
+				subnode.Rect.Width,
+				area,
+			)
+
+			if area > bigArea {
+				bigNode = subnode
+				bigArea = area
+			}
+		}
+
+		subBigNode, subBigArea := getBiggestNode(subnode)
+		if subBigArea > bigArea {
+			bigNode = subBigNode
+			bigArea = subBigArea
+		}
+	}
+
+	return bigNode, bigArea
+}
+
+func getBiggestWindow(i3 *i3ipc.IPCSocket) (i3ipc.I3Node, error) {
+	tree, err := i3.GetTree()
+	if err != nil {
+		return i3ipc.I3Node{}, err
+	}
+
+	workspace, err := getFocusedWorkspace(i3)
+	if err != nil {
+		return i3ipc.I3Node{}, err
+	}
+
+	outputNode, err := getOutputNode(tree.Nodes, workspace.Output)
+	if err != nil {
+		return i3ipc.I3Node{}, err
+	}
+
+	contentNode, err := getContentNode(outputNode.Nodes)
+	if err != nil {
+		return i3ipc.I3Node{}, err
+	}
+
+	workspaceNode, err := getWorkspaceNode(contentNode.Nodes, workspace.Name)
+	if err != nil {
+		return i3ipc.I3Node{}, err
+	}
+
+	biggest, _ := getBiggestNode(workspaceNode)
+
+	return biggest, nil
 }
 
 func getFocusedWorkspace(i3 *i3ipc.IPCSocket) (i3ipc.Workspace, error) {
