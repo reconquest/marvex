@@ -332,7 +332,23 @@ func splitWindowModeSmart(i3 *i3ipc.IPCSocket) error {
 		return err
 	}
 
-	return splitWindow(i3, window)
+	var (
+		parentLayout = window.Layout
+		width        = float32(window.Rect.Width)
+		height       = float32(window.Rect.Height)
+	)
+
+	if width*float32(0.75) > height && parentLayout != "splith" {
+		_, err := i3.Command("split horizontal")
+		return err
+	}
+
+	if height*float32(0.75) < width && parentLayout != "splitv" {
+		_, err := i3.Command("split vertical")
+		return err
+	}
+
+	return nil
 }
 
 func splitWindowModeBiggest(i3 *i3ipc.IPCSocket) error {
@@ -348,7 +364,18 @@ func splitWindowModeBiggest(i3 *i3ipc.IPCSocket) error {
 		return err
 	}
 
-	return splitWindow(i3, window)
+	width := float32(window.Rect.Width)
+	height := float32(window.Rect.Height)
+
+	if width > height {
+		_, err := i3.Command("split horizontal")
+		return err
+	} else {
+		_, err := i3.Command("split vertical")
+		return err
+	}
+
+	return nil
 }
 
 func tmuxListSessions() []string {
