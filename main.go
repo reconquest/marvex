@@ -35,6 +35,7 @@ Options:
                            which can be converted into shell by pressing
                            Enter. Pressing CTRL-S or Escape will close
                            placeholder without spawning shell.
+  --quiet                 Quiet mode, do not show new terminal name.
   --clear-re <re>         CTRL-L will be send only if following regexp matches
                            current command name [default: ^\w+sh$].
   --class <class>         Set X window class name.
@@ -69,6 +70,7 @@ func main() {
 		reserving, _           = strconv.Atoi(args["--reserving"].(string))
 		lockFile               = args["--lock"].(string)
 		dummyMode              = args["-d"].(bool)
+		quiet                  = args["--quiet"].(bool)
 	)
 
 	i3, err := i3ipc.GetIPCSocket()
@@ -203,7 +205,9 @@ func main() {
 		}
 	}
 
-	fmt.Println(terminalSession)
+	if !quiet {
+		fmt.Println(terminalSession)
+	}
 
 	err = reserveTerminals(reserving)
 	if err != nil {
