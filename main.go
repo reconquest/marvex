@@ -13,8 +13,8 @@ import (
 
 	"github.com/docopt/docopt-go"
 	"github.com/nsf/termbox-go"
-	"github.com/proxypoke/i3ipc"
 	"github.com/reconquest/executil-go"
+	"github.com/seletskiy/i3ipc"
 )
 
 const usage = `Marvex 4.0
