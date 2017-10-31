@@ -17,7 +17,7 @@ import (
 	"github.com/seletskiy/i3ipc"
 )
 
-const usage = `Marvex 4.0
+const usage = `Marvex 5.0
 
 Usage:
     marvex [options]
@@ -486,7 +486,14 @@ func runTerminal(
 	_, err := syscall.ForkExec(
 		path,
 		args,
-		&syscall.ProcAttr{Env: env},
+		&syscall.ProcAttr{
+			Env: env,
+			Files: []uintptr{
+				uintptr(syscall.Stdin),
+				uintptr(syscall.Stdout),
+				uintptr(syscall.Stderr),
+			},
+		},
 	)
 
 	return err
