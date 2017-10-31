@@ -23,26 +23,30 @@ Usage:
     marvex [options]
 
 Options:
-  -e <cmd>                Execute specified command in new terminal.
-  -b <path>               Specify path to terminal binary
-                           [default: /usr/bin/urxvt].
-  -t <tpl>                Specify window title template
-                           [default: marvex-%w-%n].
-  -c                      Send CTRL-L after opening terminal.
-  -s                      Smart split.
-  -m                      Split most bigger workspace.
-  -d                      Dummy mode will start terminal with placeholder,
-                           which can be converted into shell by pressing
-                           Enter. Pressing CTRL-S or Escape will close
-                           placeholder without spawning shell.
-  --quiet                 Quiet mode, do not show new terminal name.
-  --clear-re <re>         CTRL-L will be send only if following regexp matches
-                           current command name [default: ^\w+sh$].
-  --class <class>         Set X window class name.
-  -r --reserving <count>  Specify count of reserving terminals. [default: 2]
-  --lock <file>           Lock file path to prevent assigning same terminal to
-                           several urxvt.
-                           [default: /var/run/user/$UID/marvex.lock]
+  -e <cmd>                        Execute specified command in new terminal.
+  -b <path>                       Specify path to terminal binary
+                                   [default: /usr/bin/urxvt].
+  -t <tpl>                        Specify window title template
+                                   [default: marvex-%w-%n].
+  -c                              Send CTRL-L after opening terminal.
+  -s                              Smart split.
+  -m                              Split most bigger workspace.
+  -d                              Dummy mode will start terminal with placeholder,
+                                   which can be converted into shell by pressing
+                                   Enter. Pressing CTRL-S or Escape will close
+                                   placeholder without spawning shell.
+  --quiet                         Quiet mode, do not show new terminal name.
+  --clear-re <re>                 CTRL-L will be send only if following regexp matches
+                                   current command name [default: ^\w+sh$].
+  --class <class>                 Set X window class name.
+  -r --reserving <count>          Specify count of reserving terminals. [default: 2]
+  --lock <file>                   Lock file path to prevent assigning same terminal to
+                                   several urxvt.
+                                   [default: /var/run/user/$UID/marvex.lock]
+  --terminal-flag-command <flag>  Flag for specifying command when spawning terminal.
+                                   [default: -e]
+  --terminal-flag-title <flag>    Flag for specifying title when spawning terminal.
+                                   [default: -title]
 `
 
 type Terminal struct {
@@ -61,6 +65,8 @@ func main() {
 
 	var (
 		terminalPath           = args["-b"].(string)
+		terminalFlagCommand    = args["--terminal-flag-command"].(string)
+		terminalFlagTitle      = args["--terminal-flag-title"].(string)
 		titleTemplate          = args["-t"].(string)
 		cmdline, shouldExecute = args["-e"].(string)
 		smartSplit             = args["-s"].(bool)
@@ -125,7 +131,8 @@ func main() {
 
 			err := runTerminal(
 				i3,
-				terminalPath, terminalName, className,
+				terminalPath, terminalFlagCommand, terminalFlagTitle,
+				terminalName, className,
 				os.Args[0]+" -d",
 				smartSplit, biggestSplit,
 				append(os.Environ(), "MARVEX_DUMMY_SESSION="+terminalSession),
@@ -181,7 +188,8 @@ func main() {
 	} else {
 		err = runTerminal(
 			i3,
-			terminalPath, terminalName, className,
+			terminalPath, terminalFlagCommand, terminalFlagTitle, terminalName,
+			className,
 			"tmux attach -t "+terminalSession,
 			smartSplit, biggestSplit,
 			os.Environ(),
@@ -436,6 +444,8 @@ func getTerminalName(
 func runTerminal(
 	i3 *i3ipc.IPCSocket,
 	path string,
+	flagCommand string,
+	flagTitle string,
 	title string,
 	class string,
 	command string,
@@ -463,14 +473,14 @@ func runTerminal(
 	}
 
 	args := []string{
-		path, "-title", title,
+		path, flagTitle, title,
 	}
 
 	if class != "" {
 		args = append(args, "-name", class)
 	}
 
-	args = append(args, "-e")
+	args = append(args, flagCommand)
 	args = append(args, strings.Split(command, " ")...)
 
 	_, err := syscall.ForkExec(
