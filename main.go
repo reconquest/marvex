@@ -196,7 +196,7 @@ func main() {
 			terminalFlagCommand, terminalFlagTitle, terminalFlagTitleValue,
 			terminalName,
 			className,
-			"tmux attach -t "+terminalSession,
+			"/usr/bin/tmux attach -t "+terminalSession,
 			smartSplit, biggestSplit,
 			os.Environ(),
 		)
@@ -489,7 +489,9 @@ func runTerminal(
 		args = append(args, "-name", class)
 	}
 
-	args = append(args, flagCommand)
+	if flagCommand != "" {
+		args = append(args, flagCommand)
+	}
 	args = append(args, strings.Split(command, " ")...)
 
 	_, err := syscall.ForkExec(
