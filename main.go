@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,49 +13,52 @@ import (
 	"time"
 
 	"github.com/docopt/docopt-go"
+	"github.com/mattn/go-shellwords"
 	"github.com/nsf/termbox-go"
 	"github.com/reconquest/executil-go"
+	"github.com/reconquest/karma-go"
 	"github.com/seletskiy/i3ipc"
 )
 
-const usage = `Marvex 5.0
+const usage = `Marvex 7.0
 
 Usage:
     marvex [options]
 
 Options:
-  -e <cmd>                            Execute specified command in new terminal.
-  -b <path>                           Specify path to terminal binary
-                                       [default: /usr/bin/urxvt].
-  -t <tpl>                            Specify window title template
-                                       [default: marvex-%w-%n].
-  -c                                  Send CTRL-L after opening terminal.
-  -s                                  Smart split.
-  -m                                  Split most bigger workspace.
-  -d                                  Dummy mode will start terminal with placeholder,
-                                       which can be converted into shell by pressing
-                                       Enter. Pressing CTRL-S or Escape will close
-                                       placeholder without spawning shell.
-  --quiet                             Quiet mode, do not show new terminal name.
-  --clear-re <re>                     CTRL-L will be send only if following regexp matches
-                                       current command name [default: ^\w+sh$].
-  --class <class>                     Set X window class name.
-  -r --reserving <count>              Specify count of reserving terminals. [default: 2]
-  --lock <file>                       Lock file path to prevent assigning same terminal to
-                                       several urxvt.
-                                       [default: /var/run/user/$UID/marvex.lock]
-  --terminal-flag-command <flag>      Flag for specifying command when spawning terminal.
-                                       [default: -e]
-  --terminal-flag-title <flag>        Flag for specifying title when spawning terminal.
-                                       [default: -title]
-  --terminal-flag-title-value <flag>  Flag for specifying template of title value.
-                                       [default: %s]
+  -e <cmd>                Execute specified command in new terminal.
+  -b <path>               Specify path to terminal binary
+                           [default: /usr/bin/urxvt].
+  -t <tpl>                Specify window title template
+                           [default: marvex-%w-%n].
+  -c                      Send CTRL-L after opening terminal.
+  -s                      Smart split.
+  -m                      Split most bigger workspace.
+  -d                      Dummy mode will start terminal with placeholder,
+                           which can be converted into shell by pressing
+                           Enter. Pressing CTRL-S or Escape will close
+                           placeholder without spawning shell.
+  --quiet                 Quiet mode, do not show new terminal name.
+  --clear-re <re>         CTRL-L will be send only if following regexp matches
+                           current command name [default: ^\w+sh$].
+  --class <class>         Set X window class name.
+  -r --reserving <count>  Specify count of reserving terminals. [default: 2]
+  --lock <file>           Lock file path to prevent assigning same terminal to
+                           several urxvt.
+                           [default: /var/run/user/$UID/marvex.lock]
+  --terminal <template>   Template for new terminal command.
+                           [default: <path> -name "<class>" -title "<title>" -c "<command>"]
+  -v --verbose            Be verbose.
 `
 
 type Terminal struct {
 	Workspace string
 	Number    int
 }
+
+var (
+	verbose bool
+)
 
 // TODO: add verbose logging, rework error handling (hierarchical erors)
 // TODO: separate files by routines: i3/tmux/syscall-wrappers.
@@ -66,10 +70,8 @@ func main() {
 	args, _ := docopt.Parse(usage, nil, true, "4.0", false)
 
 	var (
-		terminalPath           = args["-b"].(string)
-		terminalFlagCommand    = args["--terminal-flag-command"].(string)
-		terminalFlagTitle      = args["--terminal-flag-title"].(string)
-		terminalFlagTitleValue = args["--terminal-flag-title-value"].(string)
+		terminal               = args["-b"].(string)
+		terminalTemplate       = args["--terminal"].(string)
 		titleTemplate          = args["-t"].(string)
 		cmdline, shouldExecute = args["-e"].(string)
 		smartSplit             = args["-s"].(bool)
@@ -81,6 +83,8 @@ func main() {
 		dummyMode              = args["-d"].(bool)
 		quiet                  = args["--quiet"].(bool)
 	)
+
+	verbose = args["--verbose"].(bool)
 
 	i3, err := i3ipc.GetIPCSocket()
 	if err != nil {
@@ -134,10 +138,11 @@ func main() {
 
 			err := runTerminal(
 				i3,
-				terminalPath,
-				terminalFlagCommand, terminalFlagTitle, terminalFlagTitleValue,
-				terminalName, className,
-				os.Args[0]+" -d",
+				terminal,
+				terminalTemplate,
+				terminalName,
+				className,
+				[]string{os.Args[0], "-d"},
 				smartSplit, biggestSplit,
 				append(os.Environ(), "MARVEX_DUMMY_SESSION="+terminalSession),
 			)
@@ -192,11 +197,11 @@ func main() {
 	} else {
 		err = runTerminal(
 			i3,
-			terminalPath,
-			terminalFlagCommand, terminalFlagTitle, terminalFlagTitleValue,
+			terminal,
+			terminalTemplate,
 			terminalName,
 			className,
-			"/usr/bin/tmux attach -t "+terminalSession,
+			[]string{"/usr/bin/tmux", "attach", "-t", terminalSession},
 			smartSplit, biggestSplit,
 			os.Environ(),
 		)
@@ -450,12 +455,10 @@ func getTerminalName(
 func runTerminal(
 	i3 *i3ipc.IPCSocket,
 	path string,
-	flagCommand string,
-	flagTitle string,
-	flagTitleValue string,
+	cmdTemplate string,
 	title string,
 	class string,
-	command string,
+	command []string,
 	smartSplit bool,
 	biggestSplit bool,
 	env []string,
@@ -479,22 +482,46 @@ func runTerminal(
 		}
 	}
 
-	titleValue := fmt.Sprintf(flagTitleValue, title)
+	if !filepath.IsAbs(path) {
+		absPath, err := exec.LookPath(path)
+		if err != nil {
+			return karma.Format(
+				err,
+				"unable to lookup %s", path,
+			)
+		}
 
-	args := []string{
-		path, flagTitle, titleValue,
+		path = absPath
 	}
 
-	if class != "" {
-		args = append(args, "-name", class)
+	replacer := strings.NewReplacer(
+		"<title>", title,
+		"<class>", class,
+		"<path>", path,
+		`"<path>"`, strings.Join(command, " "),
+	)
+
+	args, err := shellwords.Parse(cmdTemplate)
+	if err != nil {
+		return karma.Format(
+			err,
+			"unable to parse command line template",
+		)
 	}
 
-	if flagCommand != "" {
-		args = append(args, flagCommand)
+	for index, arg := range args {
+		args[index] = replacer.Replace(arg)
 	}
-	args = append(args, strings.Split(command, " ")...)
 
-	_, err := syscall.ForkExec(
+	if args[len(args)-1] == "<command>" {
+		args = append(args[:len(args)-1], command...)
+	}
+
+	if verbose {
+		log.Printf("%q", args)
+	}
+
+	_, err = syscall.ForkExec(
 		path,
 		args,
 		&syscall.ProcAttr{
