@@ -48,6 +48,7 @@ Options:
                            [default: /var/run/user/$UID/marvex.lock]
   --terminal <template>   Template for new terminal command.
                            [default: <path> -name "<class>" -title "<title>" -c "<command>"]
+  --tmux-socket <name>    Specify name of tmux socket.
   -v --verbose            Be verbose.
 `
 
@@ -82,6 +83,7 @@ func main() {
 		lockFile               = args["--lock"].(string)
 		dummyMode              = args["-d"].(bool)
 		quiet                  = args["--quiet"].(bool)
+		tmuxSocket, _          = args["--tmux-socket"].(string)
 	)
 
 	verbose = args["--verbose"].(bool)
@@ -177,8 +179,8 @@ func main() {
 		}
 	}
 
-	if !tmuxSessionExists(terminalSession) {
-		err := makeTmuxSession(terminalSession)
+	if !tmuxSessionExists(tmuxSocket, terminalSession) {
+		err := makeTmuxSession(tmuxSocket, terminalSession)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -187,7 +189,7 @@ func main() {
 	if dummyMode {
 		err = syscall.Exec(
 			"/usr/bin/tmux",
-			[]string{"tmux", "attach", "-t", terminalSession},
+			getTmuxAttachCommand(tmuxSocket, terminalSession),
 			os.Environ(),
 		)
 
@@ -201,7 +203,7 @@ func main() {
 			terminalTemplate,
 			terminalName,
 			className,
-			[]string{"/usr/bin/tmux", "attach", "-t", terminalSession},
+			getTmuxAttachCommand(tmuxSocket, terminalSession),
 			smartSplit, biggestSplit,
 			os.Environ(),
 		)
@@ -218,7 +220,7 @@ func main() {
 	}
 
 	if shouldExecute {
-		err := tmuxSend(terminalSession, cmdline)
+		err := tmuxSend(tmuxSocket, terminalSession, cmdline)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -228,10 +230,19 @@ func main() {
 		fmt.Println(terminalSession)
 	}
 
-	err = reserveTerminals(reserving)
+	err = reserveTerminals(tmuxSocket, reserving)
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func getTmuxAttachCommand(socket string, session string) []string {
+	args := []string{"/usr/bin/tmux"}
+	if session != "" {
+		args = append(args, "-L", socket)
+	}
+	args = append(args, "attach", "-t", session)
+	return args
 }
 
 func obtainLock(lockFilePath string) (func(), error) {
@@ -258,10 +269,10 @@ func obtainLock(lockFilePath string) (func(), error) {
 	}, nil
 }
 
-func reserveTerminals(need int) error {
+func reserveTerminals(socket string, need int) error {
 	reserved := 0
 
-	sessions := tmuxListSessions()
+	sessions := tmuxListSessions(socket)
 	for _, session := range sessions {
 		if strings.HasPrefix(session, "marvex-reserve-") {
 			reserved++
@@ -269,18 +280,23 @@ func reserveTerminals(need int) error {
 	}
 
 	for i := 0; i < need-reserved; i++ {
-		_, _, err := executil.Run(
-			exec.Command(
-				"tmux",
-				"new-session",
-				"-d",
-				"-s",
-				fmt.Sprintf(
-					"marvex-reserve-%d",
-					time.Now().UnixNano(),
-				),
+		var args []string
+		if socket != "" {
+			args = append(args, "-L", socket)
+		}
+
+		args = append(
+			args,
+			"new-session",
+			"-d",
+			"-s",
+			fmt.Sprintf(
+				"marvex-reserve-%d",
+				time.Now().UnixNano(),
 			),
 		)
+
+		_, _, err := executil.Run(exec.Command("tmux", args...))
 		if err != nil {
 			return err
 		}
@@ -289,42 +305,57 @@ func reserveTerminals(need int) error {
 	return nil
 }
 
-func makeTmuxSession(name string) error {
-	sessions := tmuxListSessions()
+func makeTmuxSession(socket string, name string) error {
+	sessions := tmuxListSessions(socket)
 	for _, session := range sessions {
 		if strings.HasPrefix(session, "marvex-reserve-") {
-			return tmuxRenameSession(session, name)
+			return tmuxRenameSession(socket, session, name)
 		}
 	}
 
-	return tmuxNewSession(name)
+	return tmuxNewSession(socket, name)
 }
 
-func tmuxRenameSession(old, new string) error {
-	_, _, err := executil.Run(
-		exec.Command("tmux", "rename-session", "-t", old, new),
-	)
+func tmuxRenameSession(socket string, old, new string) error {
+	var args []string
+	if socket != "" {
+		args = append(args, "-L", socket)
+	}
+
+	args = append(args, "rename-session", "-t", old, new)
+
+	_, _, err := executil.Run(exec.Command("tmux", args...))
 
 	return err
 }
 
-func tmuxNewSession(name string) error {
-	_, _, err := executil.Run(
-		exec.Command("tmux", "new-session", "-d", "-s", name),
-	)
+func tmuxNewSession(socket string, name string) error {
+	var args []string
+	fmt.Fprintf(os.Stderr, "XXXXXX main.go:333 socket: %#v\n", socket)
+	if socket != "" {
+		args = append(args, "-L", socket)
+	}
+
+	args = append(args, "new-session", "-d", "-s", name)
+
+	_, _, err := executil.Run(exec.Command("tmux", args...))
 
 	return err
 }
 
-func tmuxSend(session, cmdline string) error {
-	for !tmuxSessionExists(session) {
+func tmuxSend(socket string, session, cmdline string) error {
+	for !tmuxSessionExists(socket, session) {
 		time.Sleep(time.Millisecond * 50)
 	}
 
-	cmd := exec.Command(
-		"tmux", "send", "-t", session, cmdline+"\n",
-	)
+	var args []string
+	if socket != "" {
+		args = append(args, "-L", socket)
+	}
 
+	args = append(args, "send", "-t", session, cmdline+"\n")
+
+	cmd := exec.Command("tmux", args...)
 	_, err := cmd.CombinedOutput()
 	return err
 }
@@ -401,14 +432,23 @@ func splitWindowModeBiggest(i3 *i3ipc.IPCSocket) error {
 	return nil
 }
 
-func tmuxListSessions() []string {
-	cmd := exec.Command("tmux", "list-sessions", "-F", "#S")
+func tmuxListSessions(socket string) []string {
+	var args []string
+	if socket != "" {
+		args = append(args, "-L", socket)
+	}
+
+	args = append(args)
+
+	args = append(args, "list-sessions", "-F", "#S")
+
+	cmd := exec.Command("tmux", args...)
 	output, _ := cmd.Output()
 	return strings.Split(string(output), "\n")
 
 }
-func tmuxSessionExists(sessionName string) bool {
-	for _, tmuxSession := range tmuxListSessions() {
+func tmuxSessionExists(socket string, sessionName string) bool {
+	for _, tmuxSession := range tmuxListSessions(socket) {
 		if tmuxSession == sessionName {
 			return true
 		}
