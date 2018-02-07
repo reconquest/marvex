@@ -20,7 +20,7 @@ import (
 	"github.com/seletskiy/i3ipc"
 )
 
-const usage = `Marvex 7.0
+const usage = `Marvex 8.0
 
 Usage:
     marvex [options]
@@ -47,7 +47,7 @@ Options:
                            several urxvt.
                            [default: /var/run/user/$UID/marvex.lock]
   --terminal <template>   Template for new terminal command.
-                           [default: <path> -name "<class>" -title "<title>" -c "<command>"]
+                           [default: @path -name "@class" -title "@title" -c "@command"]
   --tmux-socket <name>    Specify name of tmux socket.
   -v --verbose            Be verbose.
 `
@@ -331,7 +331,6 @@ func tmuxRenameSession(socket string, old, new string) error {
 
 func tmuxNewSession(socket string, name string) error {
 	var args []string
-	fmt.Fprintf(os.Stderr, "XXXXXX main.go:333 socket: %#v\n", socket)
 	if socket != "" {
 		args = append(args, "-L", socket)
 	}
@@ -535,10 +534,10 @@ func runTerminal(
 	}
 
 	replacer := strings.NewReplacer(
-		"<title>", title,
-		"<class>", class,
-		"<path>", path,
-		`"<path>"`, strings.Join(command, " "),
+		"@title", title,
+		"@class", class,
+		"@path", path,
+		`"@path"`, strings.Join(command, " "),
 	)
 
 	args, err := shellwords.Parse(cmdTemplate)
@@ -549,11 +548,15 @@ func runTerminal(
 		)
 	}
 
+	if verbose {
+		log.Printf("%q", args)
+	}
+
 	for index, arg := range args {
 		args[index] = replacer.Replace(arg)
 	}
 
-	if args[len(args)-1] == "<command>" {
+	if args[len(args)-1] == "@command" {
 		args = append(args[:len(args)-1], command...)
 	}
 
