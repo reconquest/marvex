@@ -238,7 +238,7 @@ func main() {
 
 func getTmuxAttachCommand(socket string, session string) []string {
 	args := []string{"/usr/bin/tmux"}
-	if session != "" {
+	if socket != "" {
 		args = append(args, "-L", socket)
 	}
 	args = append(args, "attach", "-t", session)
