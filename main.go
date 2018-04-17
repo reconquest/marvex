@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -211,6 +212,11 @@ func main() {
 			log.Fatal(err)
 		}
 
+		err = waitWindow(terminalName)
+		if err != nil {
+			log.Fatal(err)
+		}
+
 		if shouldClearScreen {
 			err := clearScreen(args["--clear-re"].(string), terminalSession)
 			if err != nil {
@@ -234,6 +240,18 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func waitWindow(name string) error {
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		time.Second*1,
+	)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "xdotool", "search", "--sync", "--name", name)
+	_, _, err := executil.Run(cmd)
+	return err
 }
 
 func getTmuxAttachCommand(socket string, session string) []string {
