@@ -21,7 +21,7 @@ import (
 	"github.com/seletskiy/i3ipc"
 )
 
-const usage = `Marvex 8.0
+const usage = `Marvex 9.0
 
 Usage:
     marvex [options]
