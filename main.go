@@ -1,9 +1,9 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,7 +34,6 @@ Options:
                            [default: marvex-%w-%n].
   -c                      Send CTRL-L after opening terminal.
   -s                      Smart split.
-  -m                      Split most bigger workspace.
   -d                      Dummy mode will start terminal with placeholder,
                            which can be converted into shell by pressing
                            Enter. Pressing CTRL-S or Escape will close
@@ -65,6 +64,8 @@ var (
 // TODO: add verbose logging, rework error handling (hierarchical erors)
 // TODO: separate files by routines: i3/tmux/syscall-wrappers.
 func main() {
+	rand.Seed(time.Now().UnixNano())
+
 	uid := os.Getuid()
 
 	usage := strings.Replace(usage, "$UID", fmt.Sprint(uid), -1)
@@ -77,7 +78,6 @@ func main() {
 		titleTemplate          = args["-t"].(string)
 		cmdline, shouldExecute = args["-e"].(string)
 		smartSplit             = args["-s"].(bool)
-		biggestSplit           = args["-m"].(bool)
 		className, _           = args["--class"].(string)
 		shouldClearScreen      = args["-c"].(bool)
 		reserving, _           = strconv.Atoi(args["--reserving"].(string))
@@ -105,33 +105,19 @@ func main() {
 		}
 	}
 
-	tree, err := i3.GetTree()
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	workspace, err := getFocusedWorkspace(i3)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	terminals, err := getActiveTerminals(
-		titleTemplate,
-		tree,
-		workspace,
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	var (
-		terminalNumber = getNewTerminalNumber(terminals)
-		terminalName   = getTerminalName(
-			titleTemplate, workspace.Name, terminalNumber,
+		terminalID   = newTerminalID()
+		terminalName = newTerminalName(
+			titleTemplate, workspace.Name, terminalID,
 		)
 
 		terminalSession = getTerminalSession(
-			workspace.Name, terminalNumber,
+			workspace.Name, terminalID,
 		)
 	)
 
@@ -146,7 +132,7 @@ func main() {
 				terminalName,
 				className,
 				[]string{os.Args[0], "-d"},
-				smartSplit, biggestSplit,
+				smartSplit,
 				append(os.Environ(), "MARVEX_DUMMY_SESSION="+terminalSession),
 			)
 			if err != nil {
@@ -180,11 +166,9 @@ func main() {
 		}
 	}
 
-	if !tmuxSessionExists(tmuxSocket, terminalSession) {
-		err := makeTmuxSession(tmuxSocket, terminalSession)
-		if err != nil {
-			log.Fatal(err)
-		}
+	err = makeTmuxSession(tmuxSocket, terminalSession)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	if dummyMode {
@@ -205,14 +189,9 @@ func main() {
 			terminalName,
 			className,
 			getTmuxAttachCommand(tmuxSocket, terminalSession),
-			smartSplit, biggestSplit,
+			smartSplit,
 			os.Environ(),
 		)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		err = waitWindow(terminalName)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -240,18 +219,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-}
-
-func waitWindow(name string) error {
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		time.Second*1,
-	)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "xdotool", "search", "--sync", "--name", name)
-	_, _, err := executil.Run(cmd)
-	return err
 }
 
 func getTmuxAttachCommand(socket string, session string) []string {
@@ -422,33 +389,6 @@ func splitWindowModeSmart(i3 *i3ipc.IPCSocket) error {
 	return nil
 }
 
-func splitWindowModeBiggest(i3 *i3ipc.IPCSocket) error {
-	window, err := getBiggestWindow(i3)
-	if err != nil {
-		return err
-	}
-
-	_, err = i3.Command(
-		fmt.Sprintf(`[con_id="%d"] focus`, window.Id),
-	)
-	if err != nil {
-		return err
-	}
-
-	width := float32(window.Rect.Width)
-	height := float32(window.Rect.Height)
-
-	if width > height {
-		_, err := i3.Command("split horizontal")
-		return err
-	} else {
-		_, err := i3.Command("split vertical")
-		return err
-	}
-
-	return nil
-}
-
 func tmuxListSessions(socket string) []string {
 	var args []string
 	if socket != "" {
@@ -474,37 +414,30 @@ func tmuxSessionExists(socket string, sessionName string) bool {
 	return false
 }
 
-func getTerminalSession(workspace string, terminalNumber int) string {
-	return fmt.Sprintf("marvex-%s-%d", workspace, terminalNumber)
+func getTerminalSession(workspace string, id string) string {
+	return fmt.Sprintf("marvex-%s-%s", workspace, id)
 }
 
-func getNewTerminalNumber(terminals []Terminal) int {
-	newTerminalNumber := 1
-	for {
-		found := true
-		for _, terminal := range terminals {
-			if newTerminalNumber == terminal.Number {
-				newTerminalNumber = newTerminalNumber + 1
-				found = false
-				break
-			}
-		}
+func newTerminalID() string {
+	const consonants = "bcdfghjklmnpqrstvwxz"
+	const vowels = "aeiouy"
 
-		if found {
-			break
-		}
+	count := 5
+	result := ""
+	for i := 0; i < count; i++ {
+		result += string(consonants[rand.Intn(len(consonants))])
+		result += string(vowels[rand.Intn(len(vowels))])
 	}
-
-	return newTerminalNumber
+	return result
 }
 
-func getTerminalName(
+func newTerminalName(
 	template string,
 	workspace string,
-	number int,
+	id string,
 ) string {
 	result := strings.Replace(template, "%w", workspace, -1)
-	result = strings.Replace(result, "%n", strconv.Itoa(number), -1)
+	result = strings.Replace(result, "%n", id, -1)
 
 	return result
 }
@@ -517,15 +450,9 @@ func runTerminal(
 	class string,
 	command []string,
 	smartSplit bool,
-	biggestSplit bool,
 	env []string,
 ) error {
-	if biggestSplit {
-		err := splitWindowModeBiggest(i3)
-		if err != nil {
-			return err
-		}
-	} else if smartSplit {
+	if smartSplit {
 		err := splitWindowModeSmart(i3)
 		if err != nil {
 			return err
@@ -658,37 +585,6 @@ func getBiggestNode(node i3ipc.I3Node) (i3ipc.I3Node, int64) {
 	}
 
 	return bigNode, bigArea
-}
-
-func getBiggestWindow(i3 *i3ipc.IPCSocket) (i3ipc.I3Node, error) {
-	tree, err := i3.GetTree()
-	if err != nil {
-		return i3ipc.I3Node{}, err
-	}
-
-	workspace, err := getFocusedWorkspace(i3)
-	if err != nil {
-		return i3ipc.I3Node{}, err
-	}
-
-	outputNode, err := getOutputNode(tree.Nodes, workspace.Output)
-	if err != nil {
-		return i3ipc.I3Node{}, err
-	}
-
-	contentNode, err := getContentNode(outputNode.Nodes)
-	if err != nil {
-		return i3ipc.I3Node{}, err
-	}
-
-	workspaceNode, err := getWorkspaceNode(contentNode.Nodes, workspace.Name)
-	if err != nil {
-		return i3ipc.I3Node{}, err
-	}
-
-	biggest, _ := getBiggestNode(workspaceNode)
-
-	return biggest, nil
 }
 
 func getFocusedWorkspace(i3 *i3ipc.IPCSocket) (i3ipc.Workspace, error) {
