@@ -310,8 +310,15 @@ func tmuxRenameSession(socket string, old, new string) error {
 	args = append(args, "rename-session", "-t", old, new)
 
 	_, _, err := executil.Run(exec.Command("tmux", args...))
+	if err != nil {
+		if strings.Contains(err.Error(), "no current client") {
+			return nil
+		}
 
-	return err
+		return err
+	}
+
+	return nil
 }
 
 func tmuxNewSession(socket string, name string) error {
