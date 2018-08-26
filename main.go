@@ -47,7 +47,7 @@ Options:
                            several urxvt.
                            [default: /var/run/user/$UID/marvex.lock]
   --terminal <template>   Template for new terminal command.
-                           [default: @path -name "@class" -title "@title" -c "@command"]
+                           [default: @path -name "@class" -title "@title" -e "@command"]
   --tmux-socket <name>    Specify name of tmux socket.
   -v --verbose            Be verbose.
 `
