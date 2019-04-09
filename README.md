@@ -31,3 +31,25 @@ bindsym $mod+Shift+Return exec i3-sensible-terminal
 ### Reopened shell messed with previous output!
 
 Add `-c` flag to the `exec marvex` command.
+
+## Troubleshooting
+### urxvt: "c": unknown or malformed option.
+
+If you see following output when executing `marvex` command:
+
+```
+marvex-2-dyvukutufi
+urxvt: "c": unknown or malformed option.                       
+urxvt: "/usr/bin/tmux": malformed option.
+urxvt: "attach": malformed option.
+urxvt: "t": unknown or malformed option.
+urxvt: "marvex-2-dyvukutufi": malformed option.
+rxvt-unicode (urxvt) v9.22 - released: 2016-01-23
+options: perl,xft,styles,combining,blink,iso14755,unicode3,enco+kr+zh+zh-ext,fade,transparent,tint,XIM,frills,selectionscrollirsorBlink,pointerBlank,scrollbars=plain+rxvt+NeXT+xterm
+```
+
+Try specifying marvex command line arguments explicitly:
+
+```
+marvex -b urxvt --terminal '@path --title "@title" -e @command'
+```
