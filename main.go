@@ -57,9 +57,7 @@ type Terminal struct {
 	Number    int
 }
 
-var (
-	verbose bool
-)
+var verbose bool
 
 // TODO: add verbose logging, rework error handling (hierarchical erors)
 // TODO: separate files by routines: i3/tmux/syscall-wrappers.
@@ -309,6 +307,10 @@ func tmuxRenameSession(socket string, old, new string) error {
 
 	args = append(args, "rename-session", "-t", old, new)
 
+	if verbose {
+		log.Printf("%v", append([]string{"tmux"}, args...))
+	}
+
 	_, _, err := executil.Run(exec.Command("tmux", args...))
 	if err != nil {
 		if strings.Contains(err.Error(), "no current client") {
@@ -329,6 +331,9 @@ func tmuxNewSession(socket string, name string) error {
 
 	args = append(args, "new-session", "-d", "-s", name)
 
+	if verbose {
+		log.Printf("%v", append([]string{"tmux"}, args...))
+	}
 	_, _, err := executil.Run(exec.Command("tmux", args...))
 
 	return err
@@ -346,6 +351,9 @@ func tmuxSend(socket string, session, cmdline string) error {
 
 	args = append(args, "send", "-t", session, cmdline+"\n")
 
+	if verbose {
+		log.Printf("%v", append([]string{"tmux"}, args...))
+	}
 	cmd := exec.Command("tmux", args...)
 	_, err := cmd.CombinedOutput()
 	return err
@@ -406,11 +414,14 @@ func tmuxListSessions(socket string) []string {
 
 	args = append(args, "list-sessions", "-F", "#S")
 
+	if verbose {
+		log.Printf("%v", append([]string{"tmux"}, args...))
+	}
 	cmd := exec.Command("tmux", args...)
 	output, _ := cmd.Output()
 	return strings.Split(string(output), "\n")
-
 }
+
 func tmuxSessionExists(socket string, sessionName string) bool {
 	for _, tmuxSession := range tmuxListSessions(socket) {
 		if tmuxSession == sessionName {
@@ -570,7 +581,7 @@ func getBiggestNode(node i3ipc.I3Node) (i3ipc.I3Node, int64) {
 			area := int64(subnode.Rect.Height) * int64(subnode.Rect.Width)
 
 			log.Printf(
-				"node: %d | %q | %d x %d = %d | %q",
+				"node: %d | %q | %d x %d = %d",
 				subnode.Id,
 				subnode.Name,
 				subnode.Rect.Height,
@@ -724,7 +735,13 @@ func clearScreen(matchRegexp, sessionName string) error {
 		return nil
 	}
 
-	cmd := exec.Command("tmux", "send-keys", "-R", "-t", sessionName, "C-l")
+	args := []string{"send-keys", "-R", "-t", sessionName, "C-l"}
+
+	if verbose {
+		log.Printf("%v", append([]string{"tmux"}, args...))
+	}
+
+	cmd := exec.Command("tmux", args...)
 	_, err := cmd.CombinedOutput()
 
 	return err
@@ -777,6 +794,4 @@ func waitSessionToAttach(sessionName string) (bool, string) {
 			}
 		}
 	}
-
-	return false, ""
 }
