@@ -1,6 +1,6 @@
 Don't you tired of sooo slooow zsh + oh-my-zsh/prezto start?
 
-WE HAZ ANSWERZ.
+WE HAVE ANSWERZ.
 
 marvex
 ======
